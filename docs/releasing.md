@@ -1,5 +1,20 @@
 # Release Instructions
 
+## Backporting fixes
+
+Fixes can be backported using the automated cherry-picker.
+This will only work on merged commits, and always chooses the branches to backport based on labels.
+Label of the form `backport/<targetbranch>` will cherry-pick this commit to the given branch - e.g. `backport/release-3.6`.
+
+The backport will be triggered on merging, or on by adding a comment starting with `/backport` - any extra text is ignored by the bot.
+You cannot specify the backport target using comment text, only a label.
+
+Backported commits can be backported, so it may make sense to backport the `release-3.6` backport to `release-3.5` for example.
+
+Backported fixes may fail on merge conflicts and assistance will be given by the bot on how to manually create a backport.
+
+Commits generated this way are merged in the normal way, this part is not automated.
+
 ## Cherry-Picking Fixes
 
 ✋ Before you start, make sure you have created a release branch (e.g. `release-3.3`) and it's passing CI.

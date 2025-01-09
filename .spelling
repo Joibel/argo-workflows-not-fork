@@ -139,7 +139,9 @@ args
 async
 auth
 backend
+backport
 backported
+backporting
 boolean
 booleans
 buildkit
