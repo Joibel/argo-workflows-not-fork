@@ -1,5 +1,7 @@
 # Changelog
 
+Look mum, I've corrupted the changelog
+
 ## v3.6.2 (2024-12-02)
 
 Full Changelog: [v3.6.0...v3.6.2](https://github.com/argoproj/argo-workflows/compare/v3.6.0...v3.6.2)
