@@ -17,7 +17,7 @@ type Instrument struct {
 }
 
 func (m *Metrics) preCreateCheck(name string) error {
-	if inst := m.GetInstrument(name); inst != nil {
+	if _, exists := m.AllInstruments[name]; exists {
 		return fmt.Errorf("Instrument called %s already exists", name)
 	}
 	return nil
@@ -69,6 +69,8 @@ func collectOptions(options ...instrumentOption) instrumentOptions {
 
 func (m *Metrics) CreateInstrument(instType instrumentType, name, desc, unit string, options ...instrumentOption) error {
 	opts := collectOptions(options...)
+	m.Mutex.Lock()
+	defer m.Mutex.Unlock()
 	err := m.preCreateCheck(name)
 	if err != nil {
 		return err
@@ -135,11 +137,11 @@ func (m *Metrics) CreateInstrument(instType instrumentType, name, desc, unit str
 	if err != nil {
 		return err
 	}
-	m.AddInstrument(name, &Instrument{
+	m.AllInstruments[name] = &Instrument{
 		name:        name,
 		description: desc,
 		otel:        instPtr,
-	})
+	}
 	return nil
 }
 

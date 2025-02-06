@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
-	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
@@ -29,27 +28,6 @@ type customMetricValue struct {
 	key             string
 }
 
-type customMetricUserData struct {
-	mutex  sync.RWMutex
-	values map[string]*customMetricValue
-}
-
-func newUserData() *customMetricUserData {
-	return &customMetricUserData{
-		values: make(map[string]*customMetricValue),
-	}
-}
-
-func (ud *customMetricUserData) GetValue(key string) *customMetricValue {
-	ud.mutex.RLock()
-	defer ud.mutex.RUnlock()
-	val, ok := ud.values[key]
-	if !ok {
-		return nil
-	}
-	return val
-}
-
 type realtimeTracker struct {
 	inst *telemetry.Instrument
 	key  string
@@ -63,30 +41,27 @@ func (cmv *customMetricValue) getLabels() telemetry.InstAttribs {
 	return labels
 }
 
-func customUserData(i *telemetry.Instrument, requireSuccess bool) *customMetricUserData {
+func customUserdata(i *telemetry.Instrument, requireSuccess bool) map[string]*customMetricValue {
 	switch val := i.GetUserdata().(type) {
-	case *customMetricUserData:
+	case map[string]*customMetricValue:
 		return val
 	default:
 		if requireSuccess {
 			panic(fmt.Errorf("internal error: unexpected userdata on custom metric %s", i.GetName()))
 		}
-		return nil
+		return make(map[string]*customMetricValue)
 	}
 }
 
 func getOrCreateValue(i *telemetry.Instrument, key string, labels []*wfv1.MetricLabel) *customMetricValue {
-	ud := customUserData(i, true)
-	ud.mutex.Lock()
-	defer ud.mutex.Unlock()
-	if value, ok := ud.values[key]; ok {
+	if value, ok := customUserdata(i, true)[key]; ok {
 		return value
 	}
 	newValue := customMetricValue{
 		key:    key,
 		labels: labels,
 	}
-	ud.values[key] = &newValue
+	customUserdata(i, true)[key] = &newValue
 	return &newValue
 }
 
@@ -99,10 +74,7 @@ type customInstrument struct {
 // For non-realtime we have to fake observability as prometheus provides
 // up/down and set on the same gauge type, which otel forbids.
 func (i *customInstrument) customCallback(_ context.Context, o metric.Observer) error {
-	ud := customUserData(i.Instrument, true)
-	ud.mutex.RLock()
-	defer ud.mutex.RUnlock()
-	for _, value := range ud.values {
+	for _, value := range customUserdata(i.Instrument, true) {
 		if value.rtValueFunc != nil {
 			i.ObserveFloat(o, value.rtValueFunc(), value.getLabels())
 		} else {
@@ -112,23 +84,35 @@ func (i *customInstrument) customCallback(_ context.Context, o metric.Observer) 
 	return nil
 }
 
+// func addCustomMetrics(_ context.Context, m *Metrics) error {
+// 	m.customMetrics = make(map[string]*customMetric, 0)
+// 	return nil
+// }
+
 // GetCustomMetric returns a custom (or any) metric from it's key
 // This is exported for legacy testing only
 func (m *Metrics) GetCustomMetric(key string) *telemetry.Instrument {
+	m.Mutex.RLock()
+	defer m.Mutex.RUnlock()
+
 	// It's okay to return nil metrics in this function
-	return m.GetInstrument(key)
+	return m.AllInstruments[key]
 }
 
 // CustomMetricExists returns if metric exists from its key
 // This is exported for testing only
 func (m *Metrics) CustomMetricExists(key string) bool {
-	return m.GetCustomMetric(key) != nil
+	m.Mutex.RLock()
+	defer m.Mutex.RUnlock()
+
+	// It's okay to return nil metrics in this function
+	return m.AllInstruments[key] != nil
 }
 
 // TODO labels on custom metrics
 func (m *Metrics) matchExistingMetric(metricSpec *wfv1.Prometheus) (*telemetry.Instrument, error) {
 	key := metricSpec.Name
-	if inst := m.GetInstrument(key); inst != nil {
+	if inst, ok := m.AllInstruments[key]; ok {
 		if inst.GetDescription() != metricSpec.Help {
 			return nil, fmt.Errorf("Help for metric %s is already set to %s, it cannot be changed", metricSpec.Name, inst.GetDescription())
 		}
@@ -168,11 +152,11 @@ func (m *Metrics) ensureBaseMetric(metricSpec *wfv1.Prometheus, ownerKey string)
 		return nil, err
 	}
 	m.attachCustomMetricToWorkflow(metricSpec, ownerKey)
-	inst := m.GetInstrument(metricSpec.Name)
+	inst := m.AllInstruments[metricSpec.Name]
 	if inst == nil {
 		return nil, fmt.Errorf("Failed to create new metric %s", metricSpec.Name)
 	}
-	inst.SetUserdata(newUserData())
+	inst.SetUserdata(make(map[string]*customMetricValue))
 	return inst, nil
 }
 
@@ -227,8 +211,6 @@ func (m *Metrics) UpsertCustomMetric(ctx context.Context, metricSpec *wfv1.Prome
 
 func (m *Metrics) attachCustomMetricToWorkflow(metricSpec *wfv1.Prometheus, ownerKey string) {
 	if metricSpec.IsRealtime() {
-		m.realtimeMutex.Lock()
-		defer m.realtimeMutex.Unlock()
 		// Must move to run each workflowkey
 		for key := range m.realtimeWorkflows {
 			if key == ownerKey {
@@ -236,7 +218,7 @@ func (m *Metrics) attachCustomMetricToWorkflow(metricSpec *wfv1.Prometheus, owne
 			}
 		}
 		m.realtimeWorkflows[ownerKey] = append(m.realtimeWorkflows[ownerKey], realtimeTracker{
-			inst: m.GetInstrument(metricSpec.Name),
+			inst: m.AllInstruments[metricSpec.Name],
 			key:  metricSpec.GetKey(),
 		})
 	}
@@ -260,7 +242,7 @@ func (m *Metrics) createCustomMetric(metricSpec *wfv1.Prometheus) error {
 		if err != nil {
 			return err
 		}
-		inst := m.GetInstrument(metricSpec.Name)
+		inst := m.AllInstruments[metricSpec.Name]
 		customInst := customInstrument{Instrument: inst}
 		return inst.RegisterCallback(m.Metrics, customInst.customCallback)
 	default:
@@ -273,25 +255,22 @@ func (m *Metrics) createCustomGauge(metricSpec *wfv1.Prometheus) error {
 	if err != nil {
 		return err
 	}
-	inst := m.GetInstrument(metricSpec.Name)
+	inst := m.AllInstruments[metricSpec.Name]
 	customInst := customInstrument{Instrument: inst}
 	return inst.RegisterCallback(m.Metrics, customInst.customCallback)
 }
 
 func (m *Metrics) runCustomGC(ttl time.Duration) {
-	m.IterateROInstruments(func(baseMetric *telemetry.Instrument) {
-		ud := customUserData(baseMetric, false)
-		if ud == nil {
-			return
-		}
-		ud.mutex.Lock()
-		for key, value := range ud.values {
+	m.Mutex.Lock()
+	defer m.Mutex.Unlock()
+	for _, baseMetric := range m.AllInstruments {
+		custom := customUserdata(baseMetric, false)
+		for key, value := range custom {
 			if time.Since(value.lastUpdated) > ttl {
-				delete(ud.values, key)
+				delete(custom, key)
 			}
 		}
-		ud.mutex.Unlock()
-	})
+	}
 }
 
 func (m *Metrics) customMetricsGC(ctx context.Context, ttl time.Duration) {
@@ -312,18 +291,16 @@ func (m *Metrics) customMetricsGC(ctx context.Context, ttl time.Duration) {
 }
 
 func (m *Metrics) StopRealtimeMetricsForWfUID(key string) {
-	m.realtimeMutex.Lock()
-	defer m.realtimeMutex.Unlock()
+	m.Mutex.Lock()
+	defer m.Mutex.Unlock()
+
 	if _, exists := m.realtimeWorkflows[key]; !exists {
 		return
 	}
 
 	realtimeMetrics := m.realtimeWorkflows[key]
 	for _, metric := range realtimeMetrics {
-		ud := customUserData(metric.inst, true)
-		ud.mutex.Lock()
-		delete(ud.values, metric.key)
-		ud.mutex.Unlock()
+		delete(customUserdata(metric.inst, true), metric.key)
 	}
 
 	delete(m.realtimeWorkflows, key)

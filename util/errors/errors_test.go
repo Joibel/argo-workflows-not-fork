@@ -8,8 +8,6 @@ import (
 	"os/exec"
 	"testing"
 
-	log "github.com/sirupsen/logrus"
-	logtest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	apierr "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -52,19 +50,12 @@ var (
 const transientEnvVarKey = "TRANSIENT_ERROR_PATTERN"
 
 func TestIsTransientErr(t *testing.T) {
-	hook := &logtest.Hook{}
-	log.AddHook(hook)
-	defer log.StandardLogger().ReplaceHooks(nil)
-
 	t.Run("Nil", func(t *testing.T) {
 		assert.False(t, IsTransientErr(nil))
-		assert.Nil(t, hook.LastEntry())
 	})
 	t.Run("ResourceQuotaConflictErr", func(t *testing.T) {
 		assert.False(t, IsTransientErr(apierr.NewConflict(schema.GroupResource{}, "", nil)))
-		assert.Contains(t, hook.LastEntry().Message, "Non-transient error:")
 		assert.True(t, IsTransientErr(apierr.NewConflict(schema.GroupResource{Group: "v1", Resource: "resourcequotas"}, "", nil)))
-		assert.Contains(t, hook.LastEntry().Message, "Transient error:")
 	})
 	t.Run("ResourceQuotaTimeoutErr", func(t *testing.T) {
 		assert.False(t, IsTransientErr(apierr.NewInternalError(errors.New(""))))

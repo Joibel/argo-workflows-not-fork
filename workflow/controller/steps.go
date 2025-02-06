@@ -109,7 +109,7 @@ func (woc *wfOperationCtx) executeSteps(ctx context.Context, nodeName string, tm
 
 		sgNode, err := woc.executeStepGroup(ctx, stepGroup.Steps, sgNodeName, &stepsCtx)
 		if err != nil {
-			return woc.markNodeError(sgNodeName, err), nil
+			return nil, err
 		}
 		if !sgNode.Fulfilled() {
 			woc.log.Infof("Workflow step group node %s not yet completed", sgNode.ID)
@@ -330,12 +330,8 @@ func (woc *wfOperationCtx) executeStepGroup(ctx context.Context, stepGroup []wfv
 			completed = false
 		} else if childNode.Completed() {
 			hasOnExitNode, onExitNode, err := woc.runOnExitNode(ctx, step.GetExitHook(woc.execWf.Spec.Arguments), childNode, stepsCtx.boundaryID, stepsCtx.tmplCtx, "steps."+step.Name, stepsCtx.scope)
-			// see https://github.com/argoproj/argo-workflows/issues/14031,
-			// we should return error otherwise the node will get stuck
-			if err != nil {
-				return node, err
-			}
-			if hasOnExitNode && (onExitNode == nil || !onExitNode.Fulfilled()) {
+			if hasOnExitNode && (onExitNode == nil || !onExitNode.Fulfilled() || err != nil) {
+				// The onExit node is either not complete or has errored out, return.
 				completed = false
 			}
 		}

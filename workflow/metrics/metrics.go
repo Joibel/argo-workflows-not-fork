@@ -2,7 +2,6 @@ package metrics
 
 import (
 	"context"
-	"sync"
 
 	"github.com/argoproj/argo-workflows/v3/util/telemetry"
 
@@ -13,7 +12,6 @@ type Metrics struct {
 	*telemetry.Metrics
 
 	callbacks         Callbacks
-	realtimeMutex     sync.Mutex
 	realtimeWorkflows map[string][]realtimeTracker
 }
 
